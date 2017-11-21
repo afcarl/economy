@@ -3,14 +3,26 @@ import random
 import collections
 
 
-Request = collections.namedtuple('Request', ['neighbor', 'resource', 'value'])
+Request = collections.namedtuple('Request', ['agent', 'resource', 'value'])
 
 
 class Config(object):
 
-    def __init__(self):
-        self.production_per_tick = {i: 1 for i in random.sample(string.ascii_uppercase, 4)}
-        self.consumption_per_tick = {i: 1 for i in random.sample(string.ascii_uppercase, 4)}
+    def __init__(self, resources, produce_count=2, consume_count=2):
+        self.production_per_tick = {i: 1 for i in random.sample(resources, produce_count)}
+        self.consumption_per_tick = {i: 1 for i in random.sample(resources, consume_count)}
+
+    def all_items(self):
+        return set(self.consumption_per_tick.keys()) | set(self.production_per_tick.keys())
+
+
+class State(object):
+
+    def __init__(self, items=set(), health=1.0, happiness=1.0):
+        self.health = health
+        self.happiness = happiness
+        self.inventory = {i: 0 for i in items}
+        self.neighbors = {}
 
 
 class Bot(object):
@@ -18,7 +30,8 @@ class Bot(object):
     """
 
     def __init__(self):
-        self.config = None              #: Configuration for this agent.
+        self.config = None              #: Configuration for this bot.
+        self.state = None               #: State data for this bot.
 
     def request_trade(self, neighbors, inventory):
         """Return a list of trade requests to make.
@@ -36,7 +49,7 @@ class RandomBot(Bot):
         """
         i, _ = random.choice(inventory)
         n = random.choice(neighbors)
-        return [Request(neighbor=n, resource=i, value=1.0)]
+        return [Request(agent=n, resource=i, value=1)]
 
     def accept_trade(self, requests):
         return random.sample(requests, 1)
@@ -44,48 +57,44 @@ class RandomBot(Bot):
 
 class Agent(object):
 
-    def __init__(self, bot, config, health=1.0, happiness=0.0):
+    def __init__(self, bot, config, state):
         self.bot = bot
         self.config = config
-        self.health = health
-        self.happiness = happiness
+        self.state = state
 
-        items = set(self.config.consumption_per_tick.keys()) | set(self.config.production_per_tick.keys())
-        self.inventory = {i: 0 for i in items}
         self.requests = []
-        self.neighbors = []
 
     def is_healthy(self):
-        return self.health > 0.0
+        return self.state.health > 0.0
 
     def is_happy(self):
-        return self.happiness > 0.0
+        return self.state.happiness > 0.0
 
     def produce(self):
         """Agent produces goods at a fixed rate per turn.
         """
         for item, value in self.config.production_per_tick.items():
-            self.inventory[item] += value
+            self.state.inventory[item] += value
 
     def consume(self):
         """Agent consumes good at a fixed rate per turn.
         """
         for item, value in self.config.consumption_per_tick.items():
-            if self.inventory[item] >= value:
-                self.inventory[item] -= value
+            if self.state.inventory[item] >= value:
+                self.state.inventory[item] -= value
             else:
-                self.health -= value
+                self.state.health -= value
 
     def request_trade(self):
         """For all required resources, submit a request to a random agent.
         """
-        if len(self.neighbors) == 0:
+        if len(self.state.neighbors) == 0:
             return
 
-        requests = self.bot.request_trade(list(self.neighbors.keys()), list(self.inventory.items()))
+        requests = self.bot.request_trade(list(self.state.neighbors.keys()), list(self.state.inventory.items()))
         for r in requests:
-            request = Request(neighbor=self, resource=r.resource, value=r.value)
-            r.neighbor.requests.append(request)
+            request = Request(agent=self, resource=r.resource, value=r.value)
+            r.agent.requests.append(request)
 
     def accept_trade(self):
         """Process all of the requests that were sent which can be fulfilled.
@@ -94,24 +103,28 @@ class Agent(object):
             return
 
         for r in self.bot.accept_trade(self.requests):
-            if self.inventory.get(r.resource, 0) < r.value:
+            if self.state.inventory.get(r.resource, 0) < r.value:
                 continue
 
-            self.inventory[r.resource] -= r.value
-            r.neighbor.inventory[r.resource] += r.value
+            self.state.inventory[r.resource] -= r.value
+            r.agent.state.inventory[r.resource] += r.value
 
-            self.happiness += 1.0
-            r.neighbor.happiness += 1.0
+            self.state.happiness += 1.0
+            r.agent.state.happiness += 1.0
 
 
 class Simulation(object):
 
-    def __init__(self, agent_count=100, agent_health=1.0):
-        self.agents = [Agent(bot=RandomBot(), config=Config(), health=agent_health) for _ in range(agent_count)]
+    def __init__(self, resources=string.ascii_uppercase, agent_count=100, agent_health=1.0):
+        self.agents = [self.make_agent(resources, agent_health) for _ in range(agent_count)]
+
+    def make_agent(self, resources, health):
+        config = Config(resources)
+        return Agent(bot=RandomBot(), config=config, state=State(items=config.all_items(), health=health))
 
     def connect_all(self):
         for a in self.agents:
-            a.neighbors = {n: 0.0 for n in self.agents if a != n}
+            a.state.neighbors = {n: 0.0 for n in self.agents if a != n}
 
     def tick(self):
         for a in self.agents:
@@ -126,8 +139,8 @@ class Simulation(object):
         for a in self.agents:
             a.consume()
 
-    def run(self):
-        while True:
+    def run(self, iterations=1000):
+        for _ in range(iterations):
             self.tick()
 
     def count_living_agents(self):
@@ -135,3 +148,8 @@ class Simulation(object):
 
     def count_happy_agents(self):
         return len([a for a in self.agents if a.is_happy()])
+
+
+if __name__ == "__main__":
+    sim = Simulation()
+    sim.run()
